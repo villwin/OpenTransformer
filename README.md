@@ -91,7 +91,7 @@ python eval.py -m model.pt
 
 ## Experiments
 
-Our Model can achieve a CER of 6.7% without CMVN, any external LM and joint-CTC training on [AISHELL-1](http://www.openslr.org/33/), which is better than 7.4% of Chain Model in Kaldi.
+Our Model can achieve a CER of 6.26% without CMVN, any external LM and joint-CTC training on [AISHELL-1](http://www.openslr.org/33/), which is better than 7.4% of Chain Model in Kaldi.
 
 ## Acknowledge
 

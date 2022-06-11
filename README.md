@@ -1,45 +1,36 @@
 # OpenTransformer
 
 This is a speech-transformer model for end-to-end speech recognition.
-If you have any questions, please email to me. (zhengkun.tian@nlpr.ia.ac.cn)
-
 
 # Requirements
+
 Pytorch >= 1.2.0 (<= 1.6.0)
 
 Torchaudio >= 0.3.0
 
 ## TO DO
-- [ ] Reduce the redundant computation by cache the previous states during inference
+
+- [ ]  Reduce the redundant computation by cache the previous states during inference
 
 ## Function
 
 - Speech Transformer / Conformer
-
 - Label Smoothing
-
 - Tie Weights of Embedding with output softmax layer
-
 - Data Augmentation([SpecAugument](https://arxiv.org/abs/1904.08779))
-
 - Extract Fbank features in a online fashion
-
 - Read the feature with the kaldi or espnet format!
-
 - Visualization based Tensorboard [Will Be Updated Soon!]
-
 - Batch Beam Search with Length Penalty
-
 - Multiple Optimizers and Schedulers
-
 - Multiple Activation Functions in FFN
-
-- Multi GPU 
-
+- Multi GPU
 - LM Shollow Fusion
 
 ## Prepare
+
 vocab
+
 ```
 # character idx
 <PAD> 0
@@ -49,7 +40,9 @@ vocab
 你 4
 ...
 ```
+
 character
+
 ```
 BAC009S0764W0139 国 家 统 计 局 的 数 据 显 示
 BAC009S0764W0140 其 中 广 州 深 圳 甚 至 出 现 了 多 个 日 光 盘
@@ -61,7 +54,9 @@ BAC009S0764W0145 绝 大 部 分 三 线 城 市 房 价 仍 然 下 降
 BAC009S0764W0146 一 线 楼 市 成 交 量 激 增
 BAC009S0764W0147 三 四 线 城 市 依 然 冷 清
 ```
+
 if you want to compute features online, please make sure you have a wav.scp file.
+
 ```
 # wav.scp
 # id path
@@ -69,27 +64,35 @@ BAC009S0764W0139 /data/aishell/wav/BAC009S0764W0139.wav
 ```
 
 ## Train
+
 - Single GPU
+
 ```python
 python run.py -c egs/aishell/conf/transformer.yaml
 ```
+
 - Multi GPU Training based DataParallel
+
 ```python
 python run.py -c egs/aishell/transformer.yaml -n 2 -g 0,1
 ```
 
 ## Average the parameters of the last N epochs
+
 ```python
 python tools/average.py your_model_expdir 50 59    #   average the models from 50-th epoch to 59-th epoch
 ```
 
 ## Eval
+
 ```python
 python eval.py -m model.pt
 ```
 
 ## Experiments
+
 Our Model can achieve a CER of 6.7% without CMVN, any external LM and joint-CTC training on [AISHELL-1](http://www.openslr.org/33/), which is better than 7.4% of Chain Model in Kaldi.
 
 ## Acknowledge
+
 refer to [ESPNET](https://github.com/espnet/espnet).

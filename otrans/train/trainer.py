@@ -5,12 +5,16 @@ import time
 import logging
 import torch.distributed as dist
 from otrans.train.utils import MeanLoss, Visulizer, AverageMeter, Summary, map_to_cuda, AuxiliaryLossAverageMeter
-
 logger = logging.getLogger(__name__)
-
+from  tensorboardX import SummaryWriter
+import time
+try:
+    from frob import frobdecay
+except ImportError:
+    print("Failed to import Frobenius decay")
 
 class Trainer(object):
-    def __init__(self, params, model, optimizer, scheduler, is_visual=False,
+    def __init__(self, args,params, model, optimizer, scheduler, skiplist=[],is_visual=False,
                  expdir='./', ngpu=1, parallel_mode='dp', local_rank=0, is_debug=False,
                  keep_last_n_chkpt=30, from_epoch=0):
 
@@ -21,12 +25,12 @@ class Trainer(object):
         self.expdir = expdir
         self.is_visual = is_visual
         self.is_debug = is_debug
-
+        self.args=args
         self.ngpu = ngpu
         self.parallel_mode = parallel_mode
         self.local_rank = local_rank
         self.from_epoch = from_epoch
-
+        self.skiplist=skiplist
         self.total_epochs = params['train']['epochs']
         self.accum_steps = params['train']['accum_steps']
         self.grad_noise = params['train']['grad_noise']
@@ -50,9 +54,8 @@ class Trainer(object):
         if self.ngpu > 1:
             if self.parallel_mode == 'ddp':
                 import torch.distributed as dist
-                dist.init_process_group(backend="nccl", init_method='env://',
-                                        rank=local_rank, world_size=self.ngpu)
-                self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[local_rank], output_device=local_rank)
+                dist.init_process_group(backend="nccl", world_size=self.ngpu)
+                self.model = torch.nn.parallel.DistributedDataParallel(self.model, device_ids=[local_rank], output_device=local_rank,find_unused_parameters=True)
                 logger.info('[DDP] Use %d gpus for training!' % self.ngpu)
 
             elif self.parallel_mode == 'dp':
@@ -77,6 +80,9 @@ class Trainer(object):
         epochs = self.params['train']['epochs']
         TrainLossNote = Summary()
         DevLossNote = Summary()
+        if self.local_rank == 0:
+            self.writer=SummaryWriter('./logs/'+time.asctime())
+
         for epoch in range(self.from_epoch, self.total_epochs):
 
             train_loader.set_epoch(epoch)
@@ -138,6 +144,7 @@ class Trainer(object):
         step_loss = AverageMeter()
         auxiliary_loss = AuxiliaryLossAverageMeter()
         span = 0
+        grad_denom = batch_steps
         for step, (_, inputs, targets) in enumerate(train_loader):
 
             if self.ngpu > 0:
@@ -150,12 +157,10 @@ class Trainer(object):
             # axu_loss: dict {loss1: value1, loss2: value2}
             # self.model.forward_hook(self.scheduler.global_step, self.scheduler.global_epoch)
             loss, aux_loss = self.model(inputs, targets)
-
             loss = torch.mean(loss) / self.accum_steps
             loss.backward()
             end = time.time()
             span += (end - start)
-
             if self.get_rank() == 0:
                 step_loss.update(loss.item() * self.accum_steps, inputs['inputs'].size(0))
                 auxiliary_loss.update(aux_loss, self.accum_steps, inputs['inputs'].size(0))
@@ -189,12 +194,11 @@ class Trainer(object):
                         % (epoch, process, self.scheduler.global_step, self.scheduler.lr, step_loss.avg, self.mean_loss.mean(), span)
                     print_info += auxiliary_loss.avg_infos
                     logger.info(print_info)
-                    
+                    self.writer.add_scalar('loss/epoc', step_loss.avg, epoch*batch_steps+step)
+                    self.writer.flush()
                     span = 0
-
                 step_loss.reset()
                 auxiliary_loss.reset()
-
             self.global_training_step += 1
 
             if self.is_debug and step > 30:
@@ -205,17 +209,19 @@ class Trainer(object):
     def eval(self, dev_loader):
         self.model.eval()
         eval_loss = 0
-        for step, (_, batch) in enumerate(dev_loader):
+        for step, (_, batch,targets) in enumerate(dev_loader):
             if self.ngpu > 0:
                 batch = map_to_cuda(batch)
-            loss = self.model(**batch)
+                targets = map_to_cuda(targets)
+            loss,_= self.model(batch, targets)
+            loss = torch.mean(loss)
             eval_loss += loss.item()
 
         return eval_loss / (step+1)
 
     def save_model(self, epoch=None, save_name=None):
         if save_name is None:
-            save_name = 'model.epoch.%d.pt' % epoch
+            save_name = 'model.epoch.%d.%f.pt' % (epoch,self.args.rank_scale)
 
         if self.ngpu > 1:
             self.model.module.save_checkpoint(self.params, os.path.join(self.expdir, save_name))
@@ -237,7 +243,7 @@ class Trainer(object):
 
     def clear_checkpoint(self, epoch):
         if epoch + 1 > self.keep_last_n_chkpt:
-            save_name = 'model.epoch.%d.pt' % (epoch - self.keep_last_n_chkpt)
+            save_name = 'model.epoch.%d.%f.pt' % (epoch - self.keep_last_n_chkpt,self.args.rank_scale)
             if os.path.isfile(os.path.join(self.expdir, save_name)):
                 os.remove(os.path.join(self.expdir, save_name))
                 logger.info('Delete the checkpoint %s to save memory!' % os.path.join(self.expdir, save_name))

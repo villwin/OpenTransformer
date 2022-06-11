@@ -6,9 +6,9 @@ import math
 import logging
 import torch
 import torch.nn as nn
-
+import torch.nn.functional as F
 logger = logging.getLogger(__name__)
-
+from torch.autograd import Variable
 
 class BasedAttention(nn.Module):
     def __init__(self, source_dim, output_dim, enable_output_proj=True, dropout=0.0):
@@ -45,17 +45,54 @@ class BasedAttention(nn.Module):
 
         return self.dropout(context), weights
 
+def scale_offset(x):
+    gamma = torch.var(x.shape[-1:])
+    return x*gamma+gamma
+
+def rope(x,axis):
+    shape=x.size()
+    if isinstance(axis,int):
+        axis=[axis]
+    spatial_shape=[shape[i] for i in axis]
+    total_len =1
+    for i in spatial_shape:
+        total_len *=  i
+    temp=torch.arange(start=0,end=total_len)
+    #temp=temp.float32()
+    position = torch.reshape(temp, spatial_shape)
+    for i in range(axis[-1:][0]+ 1,len(shape)-1,1):
+        position = torch.unsqueeze(position,dim=-1)
+    half_size = shape[-1:][0] // 2
+    temp = torch.arange(0,half_size)
+    #temp= torch.float32
+    freq_seq = temp / float(half_size)
+    inv_freq = 10000 ** -freq_seq
+    sinusoid = torch.einsum(' ...,d -> ...d ', position, inv_freq)
+    sin = torch.sin(sinusoid).cuda()
+    cos = torch.cos(sinusoid).cuda()
+    #x1,x2 = torch.split(x,2,dim=-1)
+    x1,x2=torch.chunk(x,2,dim=-1)
+    return torch.cat([x1 * cos - x2 * sin, x2 * cos + x1 * sin],dim=-1)
+class Act_op(nn.Module):
+    def __init__(self):
+        super(Act_op,self).__init__()
+    def forward(self,x):
+        x=x*torch.sigmoid(x)
+        return  x
 
 class MultiHeadedSelfAttention(BasedAttention):
-    def __init__(self, n_heads, d_model, dropout_rate=0.0, share_qvk_proj=False):
-        super(MultiHeadedSelfAttention, self).__init__(d_model, d_model, enable_output_proj=True, dropout=dropout_rate)
+    def __init__(self, n_heads, d_model, dropout_rate=0.0, share_qvk_proj=False, rank_scale=0.5):
+        super(MultiHeadedSelfAttention, self).__init__(int(d_model * rank_scale), d_model, enable_output_proj=True,
+                                                       dropout=dropout_rate)
 
         self.d_model = d_model
         self.share_qvk_proj = share_qvk_proj
         self.nheads = n_heads
-        self.d_k = d_model // n_heads
-
-        self.qvk_proj = nn.Linear(d_model, d_model if self.share_qvk_proj else d_model * 3)
+        self.d_k = int(d_model // n_heads * rank_scale)
+        self.rank_scale = rank_scale
+        # self.qvk_proj = nn.Linear(d_model, int(d_model) if self.share_qvk_proj else int(d_model * 3))
+        self.qvk_proj = nn.Linear(d_model,
+                                  int(d_model * rank_scale) if self.share_qvk_proj else int(d_model * 3 * rank_scale))
 
     def forward(self, x, mask):
         """Compute 'Scaled Dot Product Attention'
@@ -70,13 +107,13 @@ class MultiHeadedSelfAttention(BasedAttention):
         if self.share_qvk_proj:
             query = key = value = x
         else:
-            query, key, value = torch.split(x, self.d_model, dim=-1)
+            query, key, value = torch.split(x, int(self.d_model * self.rank_scale), dim=-1)
 
         batch_size = x.size(0)
         query = query.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
         key = key.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
         value = value.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
-        
+
         scores = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(self.d_k)
 
         context, attn_weights = self.compute_context(value, scores, mask.unsqueeze(1) if mask is not None else None)
@@ -96,7 +133,7 @@ class MultiHeadedSelfAttention(BasedAttention):
         query = query.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
         key = key.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
         value = value.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
-        
+
         scores = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(self.d_k)
 
         context, attn_weights = self.compute_context(value, scores, mask.unsqueeze(1) if mask is not None else None)
@@ -137,7 +174,7 @@ class MultiHeadedCrossAttention(BasedAttention):
         query = query.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
         key = key.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
         value = value.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
-        
+
         scores = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(self.d_k)
 
         context, attn_weights = self.compute_context(value, scores, memory_mask.unsqueeze(1))
@@ -165,7 +202,7 @@ class MultiHeadedCrossAttention(BasedAttention):
         query = query.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
         key = key.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
         value = value.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
-        
+
         scores = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(self.d_k)
 
         context, attn_weights = self.compute_context(value, scores, memory_mask.unsqueeze(1))
@@ -176,81 +213,75 @@ class MultiHeadedCrossAttention(BasedAttention):
 class MultiHeadedSelfAttentionWithRelPos(BasedAttention):
     def __init__(self, n_heads, d_model, dropout_rate=0.0, skip_term_b=False, share_qvk_proj=False):
         super(MultiHeadedSelfAttentionWithRelPos, self).__init__(n_heads, d_model, dropout_rate, share_qvk_proj)
-
-        self.d_model = d_model
-        self.share_qvk_proj = share_qvk_proj
-        self.skip_term_b = skip_term_b
-        self.nheads = n_heads
-        self.d_k = d_model // n_heads
-
-        self.qvk_proj = nn.Linear(d_model, d_model if self.share_qvk_proj else d_model * 3)
-
-        self.pos_proj = nn.Linear(d_model, d_model, bias=False)
-
-        self.posu = nn.Parameter(torch.Tensor(1, 1, n_heads, self.d_k))
-        self.posv = nn.Parameter(torch.Tensor(1, 1, n_heads, self.d_k))
-
-        torch.nn.init.xavier_normal_(self.posu)
-        torch.nn.init.xavier_normal_(self.posv)
-
-    def _RelPosBias(self, content, abs_pos):
-        """Compute relative positinal encoding.
-        Args:
-            content: [B, T, N, H] if not self.skip_term_b else [1, 1, N, H]
-            abs_pos: [B, N, S=2T-1, H]
-        Returns:
-            torch.Tensor: Output tensor.
-        """
-        B, _, N, _ = content.size()
-        S= abs_pos.size(2)
-        T = (S + 1) // 2
-
-        if not self.skip_term_b:
-            matrix_bd = torch.matmul(content.transpose(1, 2), abs_pos.transpose(-2, -1)) # [B, N, T, S]
-        else:
-            matrix_bd = torch.matmul(content.transpose(1, 2), abs_pos.transpose(-2, -1)) # [1, 1, T, S]
-
-        rel_pos = torch.arange(0, T, dtype=torch.long, device=matrix_bd.device)
-        rel_pos = (rel_pos[None] - rel_pos[:, None]).reshape(1, 1, T, T) + (T - 1)
-        return torch.gather(matrix_bd, dim=3, index=rel_pos.repeat(B, N, 1, 1))
-
+        self.s = 128
+        self.gamma = nn.Parameter(torch.Tensor(2, self.s))
+        self.beta = nn.Parameter(torch.Tensor(2, self.s))
+        torch.nn.init.xavier_normal_(self.gamma)
+        torch.nn.init.constant_(self.beta, 0)
+        self.layernorm = nn.LayerNorm(d_model)
+        self.silu = Act_op()
+        expansion_factor = 1
+        self.e = int(d_model * expansion_factor)
+        self.dense = nn.Linear(d_model, 2 * self.e + self.s)
+        self.x_proj = nn.Linear(self.e, d_model)
+    def _mask_positions(self, qe):
+        #QEr is a matrix of queries (absolute position) dot distance embeddings (relative pos).
+        #Mask out invalid relative positions: e.g. if sequence length is L, the query at
+        #L-1 can only attend to distance r = 0 (no looking backward).
+        L = qe.shape[-1]
+        mask = torch.triu(torch.ones(L, L, device='cuda'), 1).flip(1)
+        return qe.masked_fill((mask == 1), 0)
+    def get_index(self, seq_len):
+        index = math.pi / 2 * torch.arange(1, seq_len + 1).reshape(1, -1, 1)
+        return nn.Parameter(index, requires_grad=False)
+    def _skew(self, qe):
+        #pad a column of zeros on the left
+        padded_qe = F.pad(qe, [1,0])
+        s = padded_qe.shape
+        padded_qe = padded_qe.view(s[0], s[1], s[3], s[2])
+        #take out first (padded) row
+        return padded_qe[:,:,1:,:]
     def forward(self, x, mask, pos):
-        """
-        Args:
-            x: [B, T, V]
-            mask: [B, 1, T]
-            pos: positional embedding [B, S=2T-1, V]
-        """
+        b,t,_=x.size()
+        m = max(b, t)
+        shortcut, x = x, self.layernorm(x)
+        s = 128
+        uv = self.dense(x)
+        u, v, base = torch.split(self.silu(uv), [self.e, self.e, s],dim=-1)
+        # Generate Query (q) and Key (k) from base.
+        base = torch.einsum(' ...r,hr -> ...hr ', base, self.gamma) + self.beta
+        base = rope(base, axis=1)
+        q, k = torch.chunk(base,2, dim=-2)
+        weight_index = self.get_index(m).to(q)
+        b,c,n,dk=q.size()
+        q=q.contiguous().transpose(1,2)
+        k = k.contiguous().transpose(1, 2)
+        embs=m-t
+        er = torch.randn([1, m, self.s], device='cuda')
+        er=er[:,embs:,:].unsqueeze(0).contiguous()
+        qer=torch.matmul(q,er.transpose(-1,-2))
+        qer=self._mask_positions(qer)
+        bias  = self._skew(qer)
+        bias=bias.reshape(b,t,t)
+        q= torch.cat(
+            [q * torch.sin(weight_index[:, :t, :] / m),
+             q * torch.cos(weight_index[:, :t, :] / m)], dim=-1)
+        # (N * h, S, 2 * d)
+        k = torch.cat(
+            [k * torch.sin(weight_index[:, :t, :] / m),
+             k * torch.cos(weight_index[:, :t, :] / m)],
+            dim=-1)
+        q=q.reshape(b,c,dk*2)
+        k=k.reshape(b,c,dk*2)
+        # Calculate the quadratic attention.
+        qk = torch.einsum(' bnd,bmd -> bnm ', q, k)
 
-        x = self.qvk_proj(x)
+        kernel = torch.square(torch.relu(qk+bias))
+        kernel *= mask
+        x = u * torch.einsum(' bnm,bme -> bne ', kernel, v)
 
-        if self.share_qvk_proj:
-            query = key = value = x
-        else:
-            query, key, value = torch.split(x, self.d_model, dim=-1)
-
-        batch_size = x.size(0)
-        # [B, T, V] -> [B, T, N, H]
-        query = query.reshape(batch_size, -1, self.nheads, self.d_k)
-        # [B, T, V] -> [B, H, T, H]
-        key = key.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
-        value = value.reshape(batch_size, -1, self.nheads, self.d_k).transpose(1, 2)
-
-        bpos = pos.size(0)
-        # [B, S, V] -> [B, S, N, H] -> [B, N, S, H]
-        pos = self.pos_proj(pos).reshape(bpos, -1, self.nheads, self.d_k).transpose(1, 2)
-
-        # [B, T, N, H] = [B, T, N, H] + [1, 1, N, H]
-        query_with_bias_u = query + self.posu
-        query_with_bias_u = query_with_bias_u.transpose(1, 2) # [B, N, T, H]
-        matrix_ac = torch.matmul(query_with_bias_u, key.transpose(-2, -1)) # [B, N, T, T] = [B, N, T, H] * [B, N, H, T]
-
-        matrix_bd = self._RelPosBias(query + self.posv if not self.skip_term_b else self.posv, pos) # [B, N, T, T]
-
-        scores = (matrix_ac + matrix_bd) / math.sqrt(self.d_k)
-        context, attn_weights = self.compute_context(value, scores, mask.unsqueeze(1) if mask is not None else None)
-
-        return context, attn_weights
+        x = self.dropout(self.x_proj(x)+shortcut)
+        return x, kernel
 
     def inference(self, inputs, mask, pos, cache=None):
         context, attn_weights = self.forward(inputs, mask, pos)

@@ -113,7 +113,11 @@ class FeatureLoader(object):
     def __init__(self, params, name, ngpu=1, mode='dp', is_eval=False):
 
         self.ngpu = ngpu
-        self.shuffle = False if is_eval else True
+        if is_eval:
+            self.shuffle = False
+        elif mode=='ddp':
+            self.shuffle = False
+        else:self.shuffle=True
         self.num_workers = params['data']['num_workers'] if 'num_workers' in params['data'] else ngpu
 
         self.dataset_type = params['data']['dataset_type']   # text, online, espnet

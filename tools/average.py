@@ -18,7 +18,7 @@ def average_chkpt(datadir, start, end):
     id_chkpt = [str(i) for i in range(int(start), int(end)+1)]
     print('Average these number %s models' % ','.join(id_chkpt))
 
-    chkpts = ['model.epoch.%s.pt' % idx for idx in id_chkpt]
+    chkpts = ['model.epoch.%s.1.000000.pt' % idx for idx in id_chkpt]
 
     params_dict = {}
     params_keys = {}

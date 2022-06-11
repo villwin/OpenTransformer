@@ -1,7 +1,7 @@
 data:
   name: aishell
   vocab: egs/aishell/data/vocab
-  batch_size: 16
+  batch_size: 32
   dataset_type: online # kaldi, online or espnet
   model_unit: chars
   train:
@@ -60,7 +60,7 @@ model:
     relative_positional: False
   decoder_type: transformer
   decoder:
-    vocab_size: 4234
+    vocab_size: 4233
     d_model: 256
     n_heads: 4
     d_ff: 2048
@@ -89,7 +89,7 @@ train:
   scheduler_type: transformer
   scheduler:
     model_size: 256
-    warmup_steps: 12000
+    warmup_steps: 4000
     factor: 1.0
   clip_grad: 5
   epochs: 80

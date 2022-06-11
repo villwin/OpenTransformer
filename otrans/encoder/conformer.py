@@ -12,6 +12,7 @@ from otrans.module.ffn import PositionwiseFeedForward
 from otrans.module.attention import MultiHeadedSelfAttentionWithRelPos, MultiHeadedSelfAttention
 from otrans.module.conformer import ConformerConvolutionModule
 from otrans.module.pos import PositionalEncoding
+from otrans.encoder.showatten import showatt
 
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 class ConformerEncoderBlock(nn.Module):
     def __init__(self, d_model, d_ff, cov_kernel_size, n_heads, slf_attn_dropout=0.0, ffn_dropout=0.0,
                  residual_dropout=0.1, conv_dropout=0.0, macaron_style=True, conv_first=False,
-                 ffn_scale=0.5, conv_bias=True, relative_positional=True, activation='glu'):
+                 ffn_scale=0.5, conv_bias=True, relative_positional=True, activation='glu',rank_scale=0.5):
         super(ConformerEncoderBlock, self).__init__()
 
         self.conv_first = conv_first
@@ -36,7 +37,7 @@ class ConformerEncoderBlock(nn.Module):
         if self.relative_positional:
             self.mha = MultiHeadedSelfAttentionWithRelPos(n_heads, d_model, slf_attn_dropout)
         else:
-            self.mha = MultiHeadedSelfAttention(n_heads, d_model, slf_attn_dropout)
+            self.mha = MultiHeadedSelfAttention(n_heads, d_model, slf_attn_dropout,rank_scale=rank_scale)
         self.mha_norm = nn.LayerNorm(d_model)
 
         self.conv = ConformerConvolutionModule(d_model, cov_kernel_size, conv_bias, conv_dropout)
@@ -117,7 +118,7 @@ class ConformerEncoderBlock(nn.Module):
 class ConformerEncoder(BaseEncoder):
     def __init__(self, d_model, d_ff, cov_kernel_size, n_heads, nblocks=12, pos_dropout=0.0,
                  slf_attn_dropout=0.0, ffn_dropout=0.0, residual_dropout=0.1, conv_dropout=0.0, macaron_style=True,
-                 ffn_scale=0.5, conv_bias=True, positional_encoding=True, relative_positional=True, conv_first=False, activation='glu'):
+                 ffn_scale=0.5, conv_bias=True, positional_encoding=True, relative_positional=True, conv_first=False, activation='glu',rank_scale=0.5):
         super(ConformerEncoder, self).__init__()
 
         self.positional_encoding = positional_encoding
@@ -131,7 +132,7 @@ class ConformerEncoder(BaseEncoder):
             [
                 ConformerEncoderBlock(
                     d_model, d_ff, cov_kernel_size, n_heads, slf_attn_dropout, ffn_dropout, residual_dropout,
-                    conv_dropout, macaron_style, conv_first, ffn_scale, conv_bias, relative_positional, activation
+                    conv_dropout, macaron_style, conv_first, ffn_scale, conv_bias, relative_positional, activation,rank_scale=rank_scale
                 ) for _ in range(nblocks)
             ]
         )
@@ -160,6 +161,8 @@ class ConformerEncoder(BaseEncoder):
         for i, block in enumerate(self.blocks):
             enc_output, attn_weight = block(enc_output, mask, pos)
             attn_weights['enc_block_%d' % i] = attn_weight
+            #showatt('/mnt/D/document','Figure_1.png','/mnt/D/document',attn_weight['slf_attn_weights'][0])
+
 
         return enc_output, mask, attn_weights
 

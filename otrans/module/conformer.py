@@ -26,6 +26,8 @@ class ConformerConvolutionModule(nn.Module):
             groups=channels,
             bias=bias
         )
+        '''self.depthwise_conv=nn.Conv2d(channels,channels,kernel_size,stride=1,padding=(kernel_size - 1) // 2
+                                      ,groups=channels,bias=bias)'''
 
         self.batch_norm = nn.BatchNorm1d(channels)
 

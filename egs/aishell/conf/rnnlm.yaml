@@ -10,7 +10,7 @@ data:
     tgt: ['egs/aishell/data/train/text']
 model:
   type: rnn_lm
-  vocab_size: 4233
+  vocab_size: 4234
   num_layers: 2
   hidden_size: 1024
   residual_dropout: 0.1

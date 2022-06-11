@@ -79,7 +79,8 @@ class Conv2dLayer(nn.Module):
         # conv1
         stride = self.stride if isinstance(self.stride, int) else self.stride[0]
         kernel_size = self.kernel_size if isinstance(self.kernel_size, int) else self.kernel_size[0]
-        mask = mask[:, math.floor(kernel_size / 2)::stride][:,:t]
+        mask = mask[:, math.floor(kernel_size / 2)::stride]
+        mask = mask[:,:t]
         return mask
 
 

@@ -8,7 +8,7 @@ import numpy as np
 
 
 BuildOptimizer = {
-    'adam': torch.optim.Adam,
+    'adam': torch.optim.AdamW,
     'sgd': torch.optim.SGD
 }
 
@@ -18,7 +18,7 @@ class BaseScheduler(object):
 
         # Attach optimizer
         self.optimizer = optimizer
-        self.global_step = 1
+        self.global_step = 0
         self.global_epoch = 0
         self.stepwise = stepwise
         self.lr = 0
@@ -135,7 +135,9 @@ class TransformerScheduler(BaseScheduler):
         super(TransformerScheduler, self).__init__(optimizer, stepwise=True)  
 
     def get_step_lr(self, step):
-        return self.factor * self.model_size ** (-0.5) * min(step ** (-0.5), step * self.warmup_steps ** (-1.5))
+        return self.factor * self.model_size ** (-0.5) * min(0.01, step * self.warmup_steps ** (-1.5))
+        #return self.factor * self.model_size ** (-0.5) * min((step+1) ** (-0.5), step * self.warmup_steps ** (-1.5))
+        #return self.factor * self.model_size ** (-1) * min((step + 1) ** (-1), step * (self.warmup_steps*10) ** (-1.5))
 
 
 class LinearWarmUpAndExpDecayScheduler(BaseScheduler):

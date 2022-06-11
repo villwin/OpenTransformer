@@ -10,7 +10,7 @@ data:
     tgt: ['egs/aishell/data/train/text']
 model:
   type: transformer_lm
-  vocab_size: 4233
+  vocab_size: 4234
   num_blocks: 6
   d_model: 256
   n_heads: 4

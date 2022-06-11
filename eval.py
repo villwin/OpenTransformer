@@ -10,6 +10,35 @@ from otrans.model import End2EndModel, LanguageModel
 from otrans.recognize import build_recognizer
 from otrans.data.loader import FeatureLoader
 from otrans.train.utils import map_to_cuda
+from torch import nn
+from torch.nn import functional as F
+from patch import patch_transformer
+try:
+    from frob import FactorizedConv, frobdecay
+except ImportError:
+    print("Failed to import factorization")
+try:
+    from frob import FactorizedLinear, batch_spectral_init, frobenius_norm, patch_module, non_orthogonality
+except ImportError:
+    print("Failed to import factorization")
+
+class FactorizedEmbedding(FactorizedLinear):
+
+    def __init__(self, embedding, **kwargs):
+        embedding.bias = None
+        super().__init__(embedding, **kwargs)
+        self.kwargs = {'padding_idx': embedding.padding_idx,
+                       'max_norm': embedding.max_norm,
+                       'norm_type': embedding.norm_type,
+                       'scale_grad_by_freq': embedding.scale_grad_by_freq,
+                       'sparse': embedding.sparse}
+        self.embedding = embedding
+        self.max_positions = embedding.max_positions if hasattr(embedding, 'max_positions') else None
+        self.embedding.weight = self.U
+
+    def forward(self, *x):
+        return F.linear(self.embedding(*x), self.VT.T)
+
 
 
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
@@ -30,6 +59,24 @@ def main(args):
     params['data']['batch_size'] = args.batch_size
     model_type = params['model']['type']
     model = End2EndModel[model_type](params['model'])
+    if 0.0 < args.rank_scale < 1.0:
+        patch_transformer(args, model)
+        if args.wd2fd:
+            no_decay, skiplist = ['w_1', 'w_2', '.conv1', '.conv2'], []
+        else:
+            no_decay, skiplist = [], ['w_1', 'w_2', '.conv1', '.conv2']
+    else:
+        no_decay, skiplist = [], []
+    # no_decay, skiplist = [], []
+
+    if args.wd2fd_quekey:
+        no_decay.extend(['_query.weight', '_key.weight'])
+    else:
+        skiplist.append('quekey')
+    if args.wd2fd_outval:
+        no_decay.extend(['_value.weight', 'output_perform.weight'])
+    else:
+        skiplist.append('outval')
 
     if 'frontend' in checkpoint:
         model.frontend.load_state_dict(checkpoint['frontend'])
@@ -96,6 +143,12 @@ def main(args):
     if args.apply_lm_rescoring:
         decoder_folder_name.append('lm_rescore')
         decoder_folder_name.append('rw_%.2f' % args.rescore_weight)
+    # if args.rank_scale :
+    #     decoder_folder_name.append('%d' % args.rank_scale)
+    # if args.spectral_quekey:
+    #     decoder_folder_name.append('%d' % args.spectral_quekey)
+    # if args.spectral:
+    #     decoder_folder_name.append('%d' % args.spectral)
     try:
         ep = re.search(r'from(\d{1,3})to(\d{1,3})', args.load_model).groups()
         decoder_folder_name.append('_'.join(list(ep)))
@@ -192,7 +245,8 @@ def main(args):
         if model_type == 'ctc':
             w.write('Decode Mode: %s \n' % args.mode)
         w.write('The WER is %.3f. \n' % wer)
-
+        logger.info('The time is %.6f' % accu_time)
+        w.write('The time is %.6f' % accu_time)
         if args.batch_size == 1:
             rtf = accu_time / total_frames * 100
             logger.info('The RTF is %.6f' % rtf)
@@ -203,7 +257,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', type=str, default=None)
     parser.add_argument('-n', '--ngpu', type=int, default=1)
-    parser.add_argument('-b', '--batch_size', type=int, default=1)
+    parser.add_argument('-b', '--batch_size', type=int, default=10)
     parser.add_argument('-nb', '--nbest', type=int, default=1)
     parser.add_argument('-bw', '--beam_width', type=int, default=5)
     parser.add_argument('-pn', '--penalty', type=float, default=0.6)
@@ -229,6 +283,15 @@ if __name__ == '__main__':
     parser.add_argument('-debug', '--debug', action='store_true', default=False)
     parser.add_argument('-sba', '--sort_by_avg_score', action='store_true', default=False)
     parser.add_argument('-ns', '--num_sample', type=int, default=1)
+    parser.add_argument('--rank-scale', default=0.5, type=float)
+    parser.add_argument('--spectral-quekey', action='store_true')
+    parser.add_argument('--spectral-outval', action='store_true')
+    parser.add_argument('--spectral', action='store_true')
+    parser.add_argument('--frobenius-decay', default=0.0, type=float)
+    parser.add_argument('--wd2fd-quekey', action='store_true')
+    parser.add_argument('--wd2fd-outval', action='store_true')
+    parser.add_argument('--wd2fd', action='store_true')
+    parser.add_argument('--square', action='store_true')
     cmd_args = parser.parse_args()
 
     main(cmd_args)

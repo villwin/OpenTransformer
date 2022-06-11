@@ -63,9 +63,10 @@ model:
     activation: glu
     positional_encoding: True
     relative_positional: True
+    rank_scale: 1
   decoder_type: transformer
   decoder:
-    vocab_size: 4234
+    vocab_size: 4233
     d_model: 384
     n_heads: 4
     d_ff: 768
@@ -80,6 +81,7 @@ model:
     normalize_before: False
     concat_after: False
     share_embedding: True
+    rank_scale: 1
     # relative_positional: False
   ctc_weight: 0.0
   smoothing: 0.1
@@ -87,10 +89,10 @@ train:
   optimizer_type: adam
   optimizer:
     lr: 0.001
-    betas: [0.9, 0.98]
+    betas: [0.9, 0.999]
     eps: 1.0e-9
     weight_decay: 1.0e-6
-    amsgrad: False
+    amsgrad: True
   scheduler_type: transformer
   scheduler:
     model_size: 256
